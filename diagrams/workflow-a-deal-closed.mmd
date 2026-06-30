@@ -1,0 +1,40 @@
+sequenceDiagram
+    autonumber
+    participant SF as Salesforce
+    participant IN as Webhook Ingress
+    participant EB as Event Bus
+    participant T as Temporal (CloseDealSaga)
+    participant ID as Idempotency DB
+    participant QB as QuickBooks
+    participant SL as Slack
+
+    SF->>IN: Opportunity Closed (webhook)
+    IN->>IN: Validate signature
+    IN->>EB: Publish deal.closed
+    EB->>T: Start workflow (dealId: D-123)
+
+    T->>ID: Check qb:invoice:D-123
+    alt Already completed
+        ID-->>T: Cached invoiceId
+    else Not exists
+        T->>QB: Create Invoice (idempotency-key: D-123)
+        QB-->>T: invoiceId INV-456
+        T->>ID: Store completed + response
+    end
+
+    T->>ID: Check slack:deal-won:D-123
+    alt Slack already sent
+        ID-->>T: Skip
+    else Send notification
+        T->>SL: Post #sales-wins
+        alt Slack fails (429/5xx)
+            SL-->>T: Error
+            T->>T: Retry with backoff (max 5x)
+            Note over T: Invoice NOT rolled back
+        else Success
+            SL-->>T: OK
+            T->>ID: Store completed
+        end
+    end
+
+    T->>EB: Publish deal.workflow.completed

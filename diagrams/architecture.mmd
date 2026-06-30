@@ -1,0 +1,82 @@
+flowchart TB
+    subgraph Sources["Source Systems"]
+        SF[Salesforce CRM]
+        QB[QuickBooks]
+        ERP[Internal ERP]
+    end
+
+    subgraph Destinations["Destination Systems"]
+        SF2[Salesforce CRM]
+        QB2[QuickBooks]
+        SL[Slack]
+        ONB[Customer Onboarding]
+    end
+
+    subgraph Ingress["Ingress Layer"]
+        WH[Webhook Ingress / API Gateway]
+        VAL[Signature Validation]
+        NORM[Event Normalizer]
+    end
+
+    subgraph Platform["Integration Platform"]
+        EB[(Event Bus<br/>Kafka / EventBridge)]
+        TEMP[Temporal Orchestrator]
+        DLQ[(Dead Letter Queue)]
+
+        subgraph Workers["Integration Workers"]
+            W_SF[Salesforce Adapter]
+            W_QB[QuickBooks Adapter]
+            W_SL[Slack Adapter]
+            W_ERP[ERP Adapter]
+        end
+
+        IDEM[(PostgreSQL<br/>Idempotency Store)]
+        VAULT[Secrets Manager / Vault]
+    end
+
+    subgraph Observability["Observability"]
+        LOG[Structured Logs]
+        MET[Metrics / SLIs]
+        TRACE[Distributed Tracing]
+        PD[PagerDuty / Alerts]
+    end
+
+    %% Workflow A: Deal Closed
+    SF -->|Platform Event: deal.closed| WH
+    WH --> VAL --> NORM --> EB
+    EB -->|deal.closed| TEMP
+    TEMP -->|1. Create Invoice| W_QB
+    W_QB --> QB2
+    TEMP -->|2. Notify Slack| W_SL
+    W_SL --> SL
+    TEMP --> IDEM
+
+    %% Workflow B: Invoice Paid
+    QB -->|Webhook: payment.received| WH
+    EB -->|invoice.paid| TEMP
+    TEMP -->|1. Update CRM| W_SF
+    W_SF --> SF2
+    TEMP -->|2. Start Onboarding| ONB
+
+    %% Workflow C: Nightly Sync
+    TEMP -->|Cron 02:00| W_ERP
+    W_ERP --> ERP
+    W_ERP -->|delta products| W_SF
+    W_SF --> SF2
+
+    %% Shared infra
+    Workers --> VAULT
+    TEMP --> DLQ
+    Platform --> LOG
+    Platform --> MET
+    Platform --> TRACE
+    DLQ --> PD
+    MET --> PD
+
+    %% Styling
+    classDef source fill:#e3f2fd,stroke:#1565c0
+    classDef platform fill:#fff3e0,stroke:#ef6c00
+    classDef obs fill:#f3e5f5,stroke:#7b1fa2
+    class SF,QB,ERP source
+    class EB,TEMP,DLQ,IDEM platform
+    class LOG,MET,TRACE,PD obs
